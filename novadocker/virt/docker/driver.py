@@ -82,8 +82,6 @@ docker_opts = [
     cfg.BoolOpt('inject_key',
                 default=False,
                 help='Inject the ssh public key at boot time'),
-    cfg.StrOpt('vif_driver',
-               default='novadocker.virt.docker.vifs.DockerGenericVIFDriver'),
 ]
 
 CONF.register_opts(docker_opts, 'docker')
