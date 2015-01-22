@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova_contrail_vif.gen_py.instance_service import InstanceService
+from contrail_vrouter_api.gen_py.instance_service import InstanceService
 
 import uuid
 import thrift
@@ -50,7 +50,8 @@ class OpenContrailComputeApi(object):
         if self._client is None:
             self._client = self._rpc_client_instance()
 
-        from nova_contrail_vif.gen_py.instance_service import ttypes
+        from contrail_vrouter_api.gen_py.instance_service import ttypes
+
         data = ttypes.Port(
             self._uuid_from_string(vif_uuid),
             self._uuid_from_string(vm_uuid),
