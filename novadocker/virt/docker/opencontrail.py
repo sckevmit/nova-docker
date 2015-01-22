@@ -26,7 +26,7 @@ class OpenContrailVIFDriver(object):
     def __init__(self):
         self._api = OpenContrailComputeApi()
 
-    def plug(self, instance, vif, container_id):
+    def plug(self, instance, vif):
         if_local_name = 'veth%s' % vif['id'][:8]
         if_remote_name = 'ns%s' % vif['id'][:8]
 
@@ -40,6 +40,19 @@ class OpenContrailVIFDriver(object):
 
             utils.execute('ip', 'link', 'set', if_remote_name, 'address',
                           vif['address'], run_as_root=True)
+
+        except:
+            LOG.exception("Failed to configure network")
+            msg = _('Failed to setup the network, rolling back')
+            undo_mgr.rollback_and_reraise(msg=msg, instance=instance)
+
+    def attach(self, instance, vif, container_id):
+        if_local_name = 'veth%s' % vif['id'][:8]
+        if_remote_name = 'ns%s' % vif['id'][:8]
+
+        undo_mgr = utils.UndoManager()
+
+        try:
             utils.execute('ip', 'link', 'set', if_remote_name, 'netns',
                           container_id, run_as_root=True)
 
@@ -49,8 +62,8 @@ class OpenContrailVIFDriver(object):
             utils.execute('ip', 'link', 'set', if_local_name, 'up',
                           run_as_root=True)
         except:
-            LOG.exception("Failed to configure network")
-            msg = _('Failed to setup the network, rolling back')
+            LOG.exception("Failed to attach the network")
+            msg = _('Failed to attach the network, rolling back')
             undo_mgr.rollback_and_reraise(msg=msg, instance=instance)
 
         # TODO: attempt DHCP client; fallback to manual config if the
