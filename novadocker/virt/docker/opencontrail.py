@@ -19,6 +19,8 @@ from novadocker.virt.docker import network
 
 from opencontrail_api import OpenContrailComputeApi
 
+from nova.i18n import _
+
 LOG = logging.getLogger(__name__)
 
 
