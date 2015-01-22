@@ -15,6 +15,7 @@
 
 from nova import utils
 from nova.openstack.common import log as logging
+from nova.network import linux_net
 from novadocker.virt.docker import network
 
 from opencontrail_api import OpenContrailComputeApi
@@ -32,6 +33,9 @@ class OpenContrailVIFDriver(object):
         if_local_name = 'veth%s' % vif['id'][:8]
         if_remote_name = 'ns%s' % vif['id'][:8]
 
+        # Device already exists so return.
+        if linux_net.device_exists(if_local_name):
+            return
         undo_mgr = utils.UndoManager()
 
         try:
