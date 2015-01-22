@@ -1,4 +1,5 @@
 # Copyright (c) 2013 dotCloud, Inc.
+# Copyright 2014 IBM Corp.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -14,24 +15,23 @@
 #    under the License.
 
 import functools
-import socket
+import inspect
 
-from eventlet.green import httplib
+from oslo.config import cfg
 import six
 
-from nova.openstack.common.gettextutils import _
-from nova.openstack.common import jsonutils
-from nova.openstack.common import log as logging
+from docker import client
+from docker import tls
 
-
-LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
 
 
 def filter_data(f):
-    """Decorator that post-processes data returned by Docker to avoid any
-       surprises with different versions of Docker
+    """Decorator that post-processes data returned by Docker.
+
+     This will avoid any surprises with different versions of Docker.
     """
-    @functools.wraps(f)
+    @functools.wraps(f, assigned=[])
     def wrapper(*args, **kwds):
         out = f(*args, **kwds)
 
@@ -50,193 +50,48 @@ def filter_data(f):
     return wrapper
 
 
-class Response(object):
-    def __init__(self, http_response, url=None):
-        self.url = url
-        self._response = http_response
-        self.code = int(http_response.status)
-        self.data = http_response.read()
-        self._json = None
-
-    def read(self, size=None):
-        return self._response.read(size)
-
-    def to_json(self, default=None):
-        if not self._json:
-            self._json = self._decode_json(self.data, default)
-        return self._json
-
-    def _validate_content_type(self):
-        # Docker does not return always the correct Content-Type.
-        # Lets try to parse the response anyway since json is requested.
-        if self._response.getheader('Content-Type') != 'application/json':
-            LOG.debug(_("Content-Type of response is not application/json"
-                       " (Docker bug?). Requested URL %s") % self.url)
-
-    @filter_data
-    def _decode_json(self, data, default=None):
-        if not data:
-            return default
-        self._validate_content_type()
-        # Do not catch ValueError or SyntaxError since that
-        # just hides the root cause of errors.
-        return jsonutils.loads(data)
-
-
-class UnixHTTPConnection(httplib.HTTPConnection):
-    def __init__(self):
-        httplib.HTTPConnection.__init__(self, 'localhost')
-        self.unix_socket = '/var/run/docker.sock'
-
-    def connect(self):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.connect(self.unix_socket)
-        self.sock = sock
-
-
-class DockerHTTPClient(object):
-    def __init__(self, connection=None):
-        self._connection = connection
-
-    @property
-    def connection(self):
-        if self._connection:
-            return self._connection
+class DockerHTTPClient(client.Client):
+    def __init__(self, url='unix://var/run/docker.sock'):
+        if (CONF.docker.cert_file or
+                CONF.docker.key_file):
+            client_cert = (CONF.docker.cert_file, CONF.docker.key_file)
         else:
-            return UnixHTTPConnection()
+            client_cert = None
+        if (CONF.docker.ca_file or
+                CONF.docker.api_insecure or
+                client_cert):
+            ssl_config = tls.TLSConfig(
+                client_cert=client_cert,
+                ca_cert=CONF.docker.ca_file,
+                verify=CONF.docker.api_insecure)
+        else:
+            ssl_config = False
+        super(DockerHTTPClient, self).__init__(
+            base_url=url,
+            version='1.13',
+            timeout=10,
+            tls=ssl_config
+        )
+        self._setup_decorators()
 
-    def make_request(self, *args, **kwargs):
-        headers = {}
-        if 'headers' in kwargs and kwargs['headers']:
-            headers = kwargs['headers']
-        if 'Content-Type' not in headers:
-            headers['Content-Type'] = 'application/json'
-            kwargs['headers'] = headers
-        conn = self.connection
-        conn.request(*args, **kwargs)
-        return Response(conn.getresponse(), url=args[1])
+    def _setup_decorators(self):
+        for name, member in inspect.getmembers(self, inspect.ismethod):
+            if not name.startswith('_'):
+                setattr(self, name, filter_data(member))
 
-    def list_containers(self, _all=True):
-        resp = self.make_request(
-            'GET',
-            '/v1.7/containers/ps?all={0}'.format(int(_all)))
-        return resp.to_json(default=[])
+    def pause(self, container_id):
+        url = self._url("/containers/{0}/pause".format(container_id))
+        res = self._post(url)
+        return res.status_code == 204
 
-    def create_container(self, args, name):
-        data = {
-            'Hostname': '',
-            'User': '',
-            'Memory': 0,
-            'MemorySwap': 0,
-            'AttachStdin': False,
-            'AttachStdout': False,
-            'AttachStderr': False,
-            'PortSpecs': [],
-            'Tty': True,
-            'OpenStdin': True,
-            'StdinOnce': False,
-            'Env': None,
-            'Cmd': [],
-            'Dns': None,
-            'Image': None,
-            'Volumes': {},
-            'VolumesFrom': '',
-        }
-        data.update(args)
-        resp = self.make_request(
-            'POST',
-            '/v1.7/containers/create?name={0}'.format(name),
-            body=jsonutils.dumps(data))
-        if resp.code != 201:
-            return
-        obj = resp.to_json()
-        for k, v in obj.iteritems():
-            if k.lower() == 'id':
-                return v
+    def unpause(self, container_id):
+        url = self._url("/containers/{0}/unpause".format(container_id))
+        res = self._post(url)
+        return res.status_code == 204
 
-    def start_container(self, container_id):
-        resp = self.make_request(
-            'POST',
-            '/v1.7/containers/{0}/start'.format(container_id),
-            body='{}')
-        return (resp.code == 200)
-
-    def inspect_image(self, image_name):
-        resp = self.make_request(
-            'GET',
-            '/v1.7/images/{0}/json'.format(image_name))
-        if resp.code != 200:
-            return
-        return resp.to_json()
-
-    def inspect_container(self, container_id):
-        resp = self.make_request(
-            'GET',
-            '/v1.7/containers/{0}/json'.format(container_id))
-        if resp.code != 200:
-            return {}
-        return resp.to_json()
-
-    def stop_container(self, container_id):
-        timeout = 5
-        resp = self.make_request(
-            'POST',
-            '/v1.7/containers/{0}/stop?t={1}'.format(container_id, timeout))
-        return (resp.code == 204)
-
-    def kill_container(self, container_id):
-        resp = self.make_request(
-            'POST',
-            '/v1.7/containers/{0}/kill'.format(container_id))
-        return (resp.code == 204)
-
-    def destroy_container(self, container_id):
-        resp = self.make_request(
-            'DELETE',
-            '/v1.7/containers/{0}'.format(container_id))
-        return (resp.code == 204)
-
-    def pull_repository(self, name):
-        parts = name.rsplit(':', 1)
-        url = '/v1.7/images/create?fromImage={0}'.format(parts[0])
-        if len(parts) > 1:
-            url += '&tag={0}'.format(parts[1])
-        resp = self.make_request('POST', url)
-        while True:
-            buf = resp.read(1024)
-            if not buf:
-                # Image pull completed
-                break
-        return (resp.code == 200)
-
-    def push_repository(self, name, headers=None):
-        url = '/v1.7/images/{0}/push'.format(name)
-        # NOTE(samalba): docker requires the credentials fields even if
-        # they're not needed here.
-        body = ('{"username":"foo","password":"bar",'
-                '"auth":"","email":"foo@bar.bar"}')
-        resp = self.make_request('POST', url, headers=headers, body=body)
-        while True:
-            buf = resp.read(1024)
-            if not buf:
-                # Image push completed
-                break
-        return (resp.code == 200)
-
-    def commit_container(self, container_id, name):
-        parts = name.rsplit(':', 1)
-        url = '/v1.7/commit?container={0}&repo={1}'.format(container_id,
-                                                           parts[0])
-        if len(parts) > 1:
-            url += '&tag={0}'.format(parts[1])
-        resp = self.make_request('POST', url)
-        return (resp.code == 201)
+    def load_repository_file(self, name, path):
+        with open(path) as fh:
+            self.load_image(fh)
 
     def get_container_logs(self, container_id):
-        resp = self.make_request(
-            'POST',
-            ('/v1.7/containers/{0}/attach'
-             '?logs=1&stream=0&stdout=1&stderr=1').format(container_id))
-        if resp.code != 200:
-            return
-        return resp.data
+        return self.attach(container_id, 1, 1, 0, 1)

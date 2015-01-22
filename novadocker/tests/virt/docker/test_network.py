@@ -15,13 +15,14 @@
 
 import uuid
 
+from oslo_concurrency import processutils
+
 from nova import exception
 from nova import test
 from nova import utils
 
-from nova.tests import utils as test_utils
+from nova.tests.unit import utils as test_utils
 
-from nova.openstack.common import processutils
 from novadocker.virt.docker import network
 
 import mock
@@ -34,7 +35,7 @@ class NetworkTestCase(test.NoDBTestCase):
         utils_mock.return_value = ("first-id\nsecond-id\nthird-id\n", None)
         network.teardown_network(id)
         utils_mock.assert_called_with('ip', 'netns', 'delete', id,
-                              run_as_root=True)
+                                      run_as_root=True)
 
     @mock.patch.object(utils, 'execute')
     def test_teardown_network_not_in_list(self, utils_mock):
