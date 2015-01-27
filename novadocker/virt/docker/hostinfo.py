@@ -15,17 +15,16 @@
 
 import os
 
+from oslo.config import cfg
+
+CONF = cfg.CONF
+
 
 def statvfs():
-    docker_path = '/var/lib/docker'
+    docker_path = CONF.docker.root_directory
     if not os.path.exists(docker_path):
         docker_path = '/'
     return os.statvfs(docker_path)
-
-
-def get_meminfo():
-    with open('/proc/meminfo') as f:
-        return f.readlines()
 
 
 def get_disk_usage():
@@ -39,35 +38,41 @@ def get_disk_usage():
     }
 
 
-def parse_meminfo():
-    meminfo = {}
-    for ln in get_meminfo():
-        parts = ln.split(':')
-        if len(parts) < 2:
-            continue
-        key = parts[0].lower()
-        value = parts[1].strip()
-        parts = value.split(' ')
-        value = parts[0]
-        if not value.isdigit():
-            continue
-        value = int(parts[0])
-        if len(parts) > 1 and parts[1] == 'kB':
-            value *= 1024
-        meminfo[key] = value
-    return meminfo
+def get_total_vcpus():
+    total_vcpus = 0
+
+    with open('/proc/cpuinfo') as f:
+        for ln in f.readlines():
+            if ln.startswith('processor'):
+                total_vcpus += 1
+
+    return total_vcpus
+
+
+def get_vcpus_used(containers):
+    total_vcpus_used = 0
+    for container in containers:
+        if isinstance(container, dict):
+            total_vcpus_used += container.get('Config', {}).get(
+                'CpuShares', 0) / 1024
+
+    return total_vcpus_used
 
 
 def get_memory_usage():
-    meminfo = parse_meminfo()
-    total = meminfo.get('memtotal', 0)
-    free = meminfo.get('memfree', 0)
-    free += meminfo.get('cached', 0)
-    free += meminfo.get('buffers', 0)
+    with open('/proc/meminfo') as f:
+        m = f.read().split()
+        idx1 = m.index('MemTotal:')
+        idx2 = m.index('MemFree:')
+        idx3 = m.index('Buffers:')
+        idx4 = m.index('Cached:')
+
+        total = int(m[idx1 + 1])
+        avail = int(m[idx2 + 1]) + int(m[idx3 + 1]) + int(m[idx4 + 1])
+
     return {
-        'total': total,
-        'free': free,
-        'used': total - free
+        'total': total * 1024,
+        'used': (total - avail) * 1024
     }
 
 
