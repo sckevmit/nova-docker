@@ -18,16 +18,16 @@ from nova.openstack.common import log as logging
 from nova.network import linux_net
 from novadocker.virt.docker import network
 
-from opencontrail_api import OpenContrailComputeApi
-
 from nova.i18n import _
+
+from contrail_vrouter_api.vrouter_api import ContrailVRouterApi
 
 LOG = logging.getLogger(__name__)
 
 
 class OpenContrailVIFDriver(object):
     def __init__(self):
-        self._api = OpenContrailComputeApi()
+        self._vrouter_client = ContrailVRouterApi(doconnect=True)
 
     def plug(self, instance, vif):
         if_local_name = 'veth%s' % vif['id'][:8]
@@ -57,14 +57,42 @@ class OpenContrailVIFDriver(object):
         if_remote_name = 'ns%s' % vif['id'][:8]
 
         undo_mgr = utils.UndoManager()
+        ipv4_address = '0.0.0.0'
+        ipv6_address = None
+        if 'subnets' in vif['network']:
+            subnets = vif['network']['subnets']
+            for subnet in subnets:
+                ips = subnet['ips'][0]
+                if (ips['version'] == 4):
+                    if ips['address'] is not None:
+                        ipv4_address = ips['address']
+                if (ips['version'] == 6):
+                    if ips['address'] is not None:
+                        ipv6_address = ips['address']
+        params = {
+            'ip_address': ipv4_address,
+            'vn_id': vif['network']['id'],
+            'display_name': instance['display_name'],
+            'hostname': instance['hostname'],
+            'host': instance['host'],
+            'vm_project_id': instance['project_id'],
+            'port_type': 'NovaVMPort',
+            'ip6_address': ipv6_address,
+        }
 
         try:
             utils.execute('ip', 'link', 'set', if_remote_name, 'netns',
                           container_id, run_as_root=True)
 
-            self._api.add_port(instance['uuid'], vif['id'], if_local_name,
-                               vif['address'],
-                               project_id=instance['project_id'])
+            result = self._vrouter_client.add_port(
+                    instance['uuid'],
+                    vif['id'],
+                    if_local_name,
+                    vif['address'],
+                    **params)
+            if not result:
+                # follow the exception path
+                raise RuntimeError, 'add_port returned %s' % str(result)
             utils.execute('ip', 'link', 'set', if_local_name, 'up',
                           run_as_root=True)
         except:
@@ -79,7 +107,7 @@ class OpenContrailVIFDriver(object):
 
     def unplug(self, instance, vif):
         try:
-            self._api.delete_port(vif['id'])
+            self._vrouter_client.delete_port(vif['id'])
         except Exception:
             LOG.exception(_("Delete port failed"), instance=instance)
 
