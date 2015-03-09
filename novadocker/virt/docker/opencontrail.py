@@ -14,9 +14,12 @@
 #    under the License.
 
 from nova import utils
-from nova.openstack.common import log as logging
 from nova.network import linux_net
 from novadocker.virt.docker import network
+try:
+    from oslo_log import log as logging
+except ImportError:
+    from nova.openstack.common import log as logging
 
 from nova.i18n import _
 

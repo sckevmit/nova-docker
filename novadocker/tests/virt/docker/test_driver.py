@@ -17,9 +17,8 @@ import contextlib
 import socket
 
 import mock
-from oslo.config import fixture as config_fixture
-from oslo.serialization import jsonutils
-from oslo.utils import units
+from oslo_config import fixture as config_fixture
+from oslo_utils import units
 
 from nova.compute import task_states
 from nova import context
@@ -78,21 +77,21 @@ class DockerDriverTestCase(test_virt_drivers._VirtDriverTestCase,
         self.assertFalse(self.connection.capabilities['has_imagecache'])
         self.assertFalse(self.connection.capabilities['supports_recreate'])
 
+    def test_get_available_resource(self):
+        pass
+
     # NOTE(bcwaldon): This exists only because _get_running_instance on the
     # base class will not let us set a custom disk/container_format.
-    def _get_running_instance(self, obj=False, image_name=None, flavor=None):
-        instance_ref = utils.get_test_instance(obj=obj, flavor=flavor)
+    def _get_running_instance(self, obj=True):
+        instance_ref = utils.get_test_instance(obj=obj)
         network_info = utils.get_test_network_info()
-        network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = (
-            '1.1.1.1')
+        network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
+            '1.1.1.1'
         image_info = utils.get_test_image_info(None, instance_ref)
         image_info['disk_format'] = 'raw'
         image_info['container_format'] = 'docker'
-        if image_name:
-            image_info['name'] = image_name
-        self.connection.spawn(self.ctxt, jsonutils.to_primitive(instance_ref),
-                              image_info, [], 'herp',
-                              network_info=network_info)
+        self.connection.spawn(self.ctxt, instance_ref, image_info,
+                              [], 'herp', network_info=network_info)
         return instance_ref, network_info
 
     @mock.patch.object(hostinfo, 'get_total_vcpus', return_value=1)
@@ -190,8 +189,7 @@ class DockerDriverTestCase(test_virt_drivers._VirtDriverTestCase,
             self.connection.spawn(self.context, instance_href, image_info,
                                   'fake_files', 'fake_password',
                                   network_info=network_info)
-            command = mc.call_args[1]['command']
-            self.assertEqual(['sh'], command)
+            self.assertIsNone(mc.call_args[1].get('command'))
 
     @mock.patch.object(novadocker.virt.docker.driver.DockerDriver,
                        '_inject_key', return_value='/tmp/.ssh')
@@ -427,7 +425,7 @@ class DockerDriverTestCase(test_virt_drivers._VirtDriverTestCase,
         result = '4294967296'
         with mock.patch('nova.utils.execute',
                         return_value=(result, None)):
-            uptime = self.connection.get_host_uptime(None)
+            uptime = self.connection.get_host_uptime()
             self.assertEqual(result, uptime)
 
     def test_get_dns_entries(self):
